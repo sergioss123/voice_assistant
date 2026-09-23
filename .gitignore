@@ -1,0 +1,25 @@
+# Models and weights
+gemma-4-e4b/
+models/
+
+# Test/experiment scripts
+TESTS/
+
+# Docs kept local only
+README.md
+MODEL_STATE.md
+pipeline_explaination.md
+
+# Runtime audio artifacts
+*.wav
+
+# Python
+__pycache__/
+*.pyc
+
+# Editor/workspace
+.vscode/
+*.code-workspace
+
+# Dependency manifest (not representative of active env)
+requirements.txt
