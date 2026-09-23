@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1"
+    >
+
+    <title>ECHO — Voice Core</title>
+
+    <link
+        rel="preconnect"
+        href="https://fonts.googleapis.com"
+    >
+
+    <link
+        rel="preconnect"
+        href="https://fonts.gstatic.com"
+        crossorigin
+    >
+
+    <link
+        href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
+        rel="stylesheet"
+    >
+
+    <link
+        rel="stylesheet"
+        href="/static/style.css?v=3"
+    >
+</head>
+
+<body>
+
+<div class="hud">
+
+    <main class="voice-core">
+
+        <section class="core-container">
+
+            <svg
+                class="ring state-idle"
+                id="ring"
+                viewBox="0 0 320 320"
+            >
+
+                <circle
+                    class="ring-bezel"
+                    cx="160"
+                    cy="160"
+                    r="150"
+                />
+
+                <g
+                    class="ticks"
+                    id="ticks"
+                ></g>
+
+                <circle
+                    class="ring-mid"
+                    cx="160"
+                    cy="160"
+                    r="118"
+                />
+
+                <circle
+                    class="ring-sweep"
+                    cx="160"
+                    cy="160"
+                    r="118"
+                />
+
+                <g
+                    class="bars"
+                    id="bars"
+                ></g>
+
+                <circle
+                    class="ring-core"
+                    cx="160"
+                    cy="160"
+                    r="54"
+                />
+
+            </svg>
+
+            <div
+                class="state-label state-idle"
+                id="state-label"
+            >
+                IDLE
+            </div>
+
+            <button
+                class="audio-hint"
+                id="audio-hint"
+                aria-label="Enable assistant audio"
+                title="Enable assistant audio"
+                type="button"
+            >
+                &#128266;
+            </button>
+
+        </section>
+
+    </main>
+
+
+    <button
+        class="conversation-btn"
+        id="conversation-btn"
+        type="button"
+    >
+        CONVERSATION
+    </button>
+
+
+    <aside
+        class="conversation-panel"
+        id="conversation-panel"
+    >
+
+        <div class="conversation-header">
+
+            <div>
+                <span class="conversation-title">
+                    CONVERSATION
+                </span>
+
+                <span class="conversation-subtitle">
+                    VOICE CORE LOG
+                </span>
+            </div>
+
+            <button
+                class="conversation-close"
+                id="conversation-close"
+                type="button"
+            >
+                ×
+            </button>
+
+        </div>
+
+        <section class="conversation-section">
+
+            <h2>TRANSCRIPT</h2>
+
+            <div
+                class="log"
+                id="transcript-log"
+            >
+                <p class="log-empty">
+                    Nothing heard yet.
+                </p>
+            </div>
+
+        </section>
+
+        <section class="conversation-section">
+
+            <h2>REPLY</h2>
+
+            <div
+                class="log"
+                id="reply-log"
+            >
+                <p class="log-empty">
+                    Waiting for input.
+                </p>
+            </div>
+
+        </section>
+
+        <section class="conversation-section">
+
+            <h2>TOOLS</h2>
+
+            <div
+                class="tools"
+                id="tools"
+            ></div>
+
+        </section>
+
+    </aside>
+
+</div>
+
+<script src="/static/app.js?v=13"></script>
+
+</body>
+</html>
