@@ -6,7 +6,6 @@ models/
 TESTS/
 
 # Docs kept local only
-README.md
 MODEL_STATE.md
 pipeline_explaination.md
 
