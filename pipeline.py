@@ -279,6 +279,12 @@ KOKORO_MODEL_NAME = (
 KOKORO_VOICE = "af_heart"
 
 
+KOKORO_VOICE_BY_LANG_CODE = {
+    "a": "af_heart",
+    "e": "ef_dora",
+}
+
+
 KOKORO_LANG_CODE = "a"
 
 
@@ -765,7 +771,9 @@ def warm_up_models() -> None:
 
             for _ in kokoro_model.generate(
                 text="Hello.",
-                voice=KOKORO_VOICE,
+                voice=KOKORO_VOICE_BY_LANG_CODE.get(
+                    lang_code, KOKORO_VOICE
+                ),
                 speed=1.0,
                 lang_code=lang_code,
             ):
@@ -1848,7 +1856,10 @@ def synthesize(
                 text,
 
             voice=
-                KOKORO_VOICE,
+                KOKORO_VOICE_BY_LANG_CODE.get(
+                    lang_code,
+                    KOKORO_VOICE,
+                ),
 
             speed=
                 1.0,
