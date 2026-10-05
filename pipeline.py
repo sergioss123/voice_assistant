@@ -191,6 +191,50 @@ WAKEWORD = "alexa"
 EXIT_WORD = "stop"
 
 
+# ============================================================
+# LANGUAGE
+# ============================================================
+#
+# The session language is fixed for the whole conversation and
+# only changes when the user says one of the trigger phrases
+# below. It is NOT re-detected automatically each turn, because
+# per-utterance auto-detection is what caused inconsistent
+# transcription language.
+# ============================================================
+
+DEFAULT_LANGUAGE = "en"
+
+
+# Kokoro's G2P/phonemizer lang_code per session language.
+KOKORO_LANG_CODE_BY_LANGUAGE = {
+    "en": "a",
+    "es": "e",
+}
+
+
+# Spoken commands that switch the session language. Matched as a
+# substring of the normalized transcript, accent-insensitive.
+LANGUAGE_SWITCH_PHRASES = {
+    "en": "speak english",
+    "es": "habla espanol",
+}
+
+
+_ACCENT_MAP = str.maketrans(
+    "áéíóúñ",
+    "aeioun",
+)
+
+
+def fold_accents(
+    value: str,
+) -> str:
+
+    return value.translate(
+        _ACCENT_MAP
+    )
+
+
 WAKE_FRAME_LENGTH = 1280
 
 
@@ -370,119 +414,123 @@ TOOLS = [
 # TOOLS IMPLEMENTATION
 # ============================================================
 
-def get_current_time() -> str:
-
-    return time.strftime(
-        "%A, %B %d, %Y at %I:%M %p"
-    )
-
-
-def greet_choco() -> str:
-
-    return (
-        "Hola Choco, somos tus amigos"
-    )
-
-
-def weather_code_to_spanish(
-    code,
+def get_current_time(
+    language: str = DEFAULT_LANGUAGE,
 ) -> str:
 
-    descriptions = {
-
-        0:
-            "cielo despejado",
-
-        1:
-            "principalmente despejado",
-
-        2:
-            "parcialmente nublado",
-
-        3:
-            "nublado",
-
-        45:
-            "niebla",
-
-        48:
-            "niebla con escarcha",
-
-        51:
-            "llovizna ligera",
-
-        53:
-            "llovizna moderada",
-
-        55:
-            "llovizna intensa",
-
-        56:
-            "llovizna helada ligera",
-
-        57:
-            "llovizna helada intensa",
-
-        61:
-            "lluvia ligera",
-
-        63:
-            "lluvia moderada",
-
-        65:
-            "lluvia intensa",
-
-        66:
-            "lluvia helada ligera",
-
-        67:
-            "lluvia helada intensa",
-
-        71:
-            "nevada ligera",
-
-        73:
-            "nevada moderada",
-
-        75:
-            "nevada intensa",
-
-        77:
-            "granos de nieve",
-
-        80:
-            "chubascos ligeros",
-
-        81:
-            "chubascos moderados",
-
-        82:
-            "chubascos intensos",
-
-        85:
-            "chubascos de nieve ligeros",
-
-        86:
-            "chubascos de nieve intensos",
-
-        95:
-            "tormenta eléctrica",
-
-        96:
-            "tormenta eléctrica con granizo ligero",
-
-        99:
-            "tormenta eléctrica con granizo intenso",
-    }
+    now = time.localtime()
 
 
-    return descriptions.get(
-        code,
-        "condiciones meteorológicas desconocidas",
+    if language == "es":
+
+        weekday = WEEKDAYS_ES[now.tm_wday]
+
+        month = MONTHS_ES[now.tm_mon - 1]
+
+
+        return (
+            f"Hoy es {weekday}, {now.tm_mday} de {month} "
+            f"de {now.tm_year}, son las "
+            f"{time.strftime('%I:%M %p', now)}"
+        )
+
+
+    return time.strftime(
+        "%A, %B %d, %Y at %I:%M %p",
+        now,
     )
 
 
-def get_weather_garcia() -> str:
+WEEKDAYS_ES = [
+    "lunes", "martes", "miércoles", "jueves",
+    "viernes", "sábado", "domingo",
+]
+
+
+MONTHS_ES = [
+    "enero", "febrero", "marzo", "abril",
+    "mayo", "junio", "julio", "agosto",
+    "septiembre", "octubre", "noviembre", "diciembre",
+]
+
+
+def greet_choco(
+    language: str = DEFAULT_LANGUAGE,
+) -> str:
+
+    if language == "es":
+
+        return (
+            "Hola Choco, somos tus amigos"
+        )
+
+
+    return (
+        "Hello Choco, we are your friends"
+    )
+
+
+WEATHER_DESCRIPTIONS = {
+
+    0: {"es": "cielo despejado", "en": "clear sky"},
+    1: {"es": "principalmente despejado", "en": "mostly clear"},
+    2: {"es": "parcialmente nublado", "en": "partly cloudy"},
+    3: {"es": "nublado", "en": "cloudy"},
+    45: {"es": "niebla", "en": "fog"},
+    48: {"es": "niebla con escarcha", "en": "rime fog"},
+    51: {"es": "llovizna ligera", "en": "light drizzle"},
+    53: {"es": "llovizna moderada", "en": "moderate drizzle"},
+    55: {"es": "llovizna intensa", "en": "heavy drizzle"},
+    56: {"es": "llovizna helada ligera", "en": "light freezing drizzle"},
+    57: {"es": "llovizna helada intensa", "en": "heavy freezing drizzle"},
+    61: {"es": "lluvia ligera", "en": "light rain"},
+    63: {"es": "lluvia moderada", "en": "moderate rain"},
+    65: {"es": "lluvia intensa", "en": "heavy rain"},
+    66: {"es": "lluvia helada ligera", "en": "light freezing rain"},
+    67: {"es": "lluvia helada intensa", "en": "heavy freezing rain"},
+    71: {"es": "nevada ligera", "en": "light snowfall"},
+    73: {"es": "nevada moderada", "en": "moderate snowfall"},
+    75: {"es": "nevada intensa", "en": "heavy snowfall"},
+    77: {"es": "granos de nieve", "en": "snow grains"},
+    80: {"es": "chubascos ligeros", "en": "light showers"},
+    81: {"es": "chubascos moderados", "en": "moderate showers"},
+    82: {"es": "chubascos intensos", "en": "heavy showers"},
+    85: {"es": "chubascos de nieve ligeros", "en": "light snow showers"},
+    86: {"es": "chubascos de nieve intensos", "en": "heavy snow showers"},
+    95: {"es": "tormenta eléctrica", "en": "thunderstorm"},
+    96: {"es": "tormenta eléctrica con granizo ligero", "en": "thunderstorm with light hail"},
+    99: {"es": "tormenta eléctrica con granizo intenso", "en": "thunderstorm with heavy hail"},
+}
+
+
+def describe_weather_code(
+    code,
+    language: str = DEFAULT_LANGUAGE,
+) -> str:
+
+    entry = WEATHER_DESCRIPTIONS.get(
+        code
+    )
+
+
+    if entry is None:
+
+        if language == "es":
+
+            return "condiciones meteorológicas desconocidas"
+
+        return "unknown weather conditions"
+
+
+    return entry.get(
+        language,
+        entry["en"],
+    )
+
+
+def get_weather_garcia(
+    language: str = DEFAULT_LANGUAGE,
+) -> str:
 
     latitude = 25.8069
 
@@ -557,19 +605,33 @@ def get_weather_garcia() -> str:
     )
 
 
-    description =weather_code_to_spanish(
-            weather_code
+    description =describe_weather_code(
+            weather_code,
+            language,
+        )
+
+
+    if language == "es":
+
+        return (
+            f"En García, Nuevo León, actualmente "
+            f"hay {temperature} grados Celsius, "
+            f"{description}. "
+            f"La sensación térmica es de "
+            f"{apparent} grados, "
+            f"la humedad es de {humidity} por ciento "
+            f"y el viento es de {wind} kilómetros por hora."
         )
 
 
     return (
-        f"En García, Nuevo León, actualmente "
-        f"hay {temperature} grados Celsius, "
+        f"In García, Nuevo León, it is currently "
+        f"{temperature} degrees Celsius, "
         f"{description}. "
-        f"La sensación térmica es de "
-        f"{apparent} grados, "
-        f"la humedad es de {humidity} por ciento "
-        f"y el viento es de {wind} kilómetros por hora."
+        f"The apparent temperature is "
+        f"{apparent} degrees, "
+        f"humidity is {humidity} percent, "
+        f"and wind speed is {wind} kilometers per hour."
     )
 
 
@@ -1385,6 +1447,7 @@ def record_audio(
 
 def transcribe(
     path: str = "turn_input.wav",
+    language: str = DEFAULT_LANGUAGE,
 ) -> tuple[str, float]:
 
     start = time.time()
@@ -1398,6 +1461,9 @@ def transcribe(
                 WHISPER_MODEL,
 
             task="transcribe",
+
+            language=
+                language,
         )
 
 
@@ -1411,7 +1477,7 @@ def transcribe(
 
 
     print(
-        f"Whisper: {text}"
+        f"Whisper ({language}): {text}"
     )
 
 
@@ -1428,6 +1494,7 @@ def transcribe(
 def get_reply(
     user_text: str,
     emit,
+    language: str = DEFAULT_LANGUAGE,
 ) -> tuple[str, float]:
 
     start = time.time()
@@ -1549,6 +1616,9 @@ def get_reply(
         result =AVAILABLE_TOOLS[
                 fn_name
             ](
+                language=
+                    language,
+
                 **fn_args
             )
 
@@ -1681,6 +1751,7 @@ def get_reply(
 
 def synthesize(
     text: str,
+    lang_code: str = KOKORO_LANG_CODE,
 ) -> tuple[bytes, int, float, float]:
 
     start = time.time()
@@ -1716,7 +1787,7 @@ def synthesize(
                 1.0,
 
             lang_code=
-                KOKORO_LANG_CODE,
+                lang_code,
         )
     ):
 
@@ -2004,16 +2075,16 @@ def speak_wake_acknowledgement(
 # CONTINUOUS SESSION
 # ============================================================
 
-def run_session(
+def _run_session_once(
     emit,
     stop_event,
     audio_finished_event,
     playback_state,
     wait_for_wake_word: bool = True,
-) -> None:
+) -> str:
 
     """
-    Continuous conversational session.
+    Runs a single wake-word-to-"stop" conversation cycle.
 
     ``wait_for_wake_word`` selects how the session starts. The normal default
     waits for ``Alexa``. The current browser connection uses this default.
@@ -2041,7 +2112,7 @@ def run_session(
 
     print()
     print(
-                        "speaking"
+        "========================================"
     )
     print(
         "ECHO CONTINUOUS CONVERSATION STARTED"
@@ -2050,6 +2121,10 @@ def run_session(
         "========================================"
     )
     print()
+
+
+    # Resets every call, i.e. every new session / after "stop".
+    session_language = DEFAULT_LANGUAGE
 
 
     try:
@@ -2270,7 +2345,10 @@ def run_session(
                 )
 
 
-                text, t_stt =transcribe()
+                text, t_stt =transcribe(
+                        language=
+                            session_language,
+                    )
 
 
                 emit(
@@ -2299,6 +2377,46 @@ def run_session(
                     )
 
                     break
+
+
+                # =================================================
+                # SPOKEN LANGUAGE SWITCH
+                # =================================================
+
+                folded_text = fold_accents(
+                    normalized_text
+                )
+
+
+                switched_language = None
+
+
+                for lang_code, phrase in LANGUAGE_SWITCH_PHRASES.items():
+
+                    if fold_accents(phrase) in folded_text:
+
+                        switched_language = lang_code
+
+                        break
+
+
+                if switched_language is not None:
+
+                    session_language = switched_language
+
+                    print(
+                        f"Language switched to: {session_language}"
+                    )
+
+                    emit(
+                        "state",
+                        {
+                            "value":
+                                "listening"
+                        },
+                    )
+
+                    continue
 
 
                 # =================================================
@@ -2341,6 +2459,7 @@ def run_session(
                 reply, t_llm =get_reply(
                         text,
                         emit,
+                        session_language,
                     )
 
 
@@ -2377,7 +2496,11 @@ def run_session(
                     t_tts,
                     audio_duration,
                 ) = synthesize(
-                    reply
+                    reply,
+                    KOKORO_LANG_CODE_BY_LANGUAGE.get(
+                        session_language,
+                        KOKORO_LANG_CODE,
+                    ),
                 )
 
 
@@ -2530,6 +2653,20 @@ def run_session(
                 )
 
 
+        # Loop in run_session() re-arms wake-word detection unless the
+        # session itself is ending.
+        if stop_event.is_set():
+
+            return "ended"
+
+
+        print(
+            'Restarting wake-word detection after "stop".'
+        )
+
+        return "stop_word"
+
+
     except Exception as e:
 
         print(
@@ -2562,3 +2699,45 @@ def run_session(
             "ECHO continuous conversation stopped."
         )
         print()
+
+
+# ============================================================
+# CONTINUOUS SESSION (PUBLIC ENTRY POINT)
+# ============================================================
+
+def run_session(
+    emit,
+    stop_event,
+    audio_finished_event,
+    playback_state,
+    wait_for_wake_word: bool = True,
+) -> None:
+
+    """
+    Runs conversation cycles back-to-back.
+
+    Saying "stop" ends the current cycle and re-arms wake-word detection
+    instead of ending the whole session; the session only ends on
+    ``stop_event`` (browser stop/disconnect) or a wake-word timeout.
+    """
+
+    require_wake_word = wait_for_wake_word
+
+
+    while not stop_event.is_set():
+
+        result = _run_session_once(
+            emit,
+            stop_event,
+            audio_finished_event,
+            playback_state,
+            require_wake_word,
+        )
+
+
+        if result != "stop_word":
+
+            return
+
+
+        require_wake_word = True
