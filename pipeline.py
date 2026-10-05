@@ -214,12 +214,34 @@ KOKORO_LANG_CODE_BY_LANGUAGE = {
 }
 
 
-# Spoken commands that switch the session language. Matched as a
-# substring of the normalized transcript, accent-insensitive.
-LANGUAGE_SWITCH_PHRASES = {
-    "en": "speak english",
-    "es": "habla espanol",
+# Spoken commands that change the session language. The language is
+# never auto-detected: it stays fixed until one of these is heard.
+#
+# A command is a short utterance (LANGUAGE_COMMAND_MAX_WORDS) that
+# contains a command verb plus a language word, e.g. "speak spanish",
+# "habla inglés", "cambia a español". "Change language" / "cambia de
+# idioma" / "cambia de lenguaje" toggles to the other language.
+#
+# The English command is normally said in Spanish ("habla inglés")
+# because while the session is Spanish, Whisper transcribes everything
+# as Spanish.
+LANGUAGE_NAMES = {
+    "es": ("espanol", "spanish"),
+    "en": ("ingles", "english"),
 }
+
+
+# Includes common Whisper mishearings such as "abla".
+LANGUAGE_COMMAND_VERBS = (
+    "habla", "abla", "hablar", "speak", "cambia", "cambiar",
+    "change", "switch", "pasa", "pon",
+)
+
+
+LANGUAGE_NOUNS = ("idioma", "lenguaje", "language")
+
+
+LANGUAGE_COMMAND_MAX_WORDS = 5
 
 
 _ACCENT_MAP = str.maketrans(
@@ -235,6 +257,37 @@ def fold_accents(
     return value.translate(
         _ACCENT_MAP
     )
+
+
+def detect_language_command(
+    text: str,
+    current: str,
+) -> str | None:
+
+    """
+    Return the language to switch to if ``text`` is a language command,
+    otherwise None.
+    """
+
+    words = fold_accents(text.lower()).replace(",", " ").split()
+
+    words = [w.strip(".!?¿¡\"'") for w in words]
+
+    if not words or len(words) > LANGUAGE_COMMAND_MAX_WORDS:
+        return None
+
+    if not any(w in LANGUAGE_COMMAND_VERBS for w in words):
+        return None
+
+    for lang, names in LANGUAGE_NAMES.items():
+
+        if any(w in names for w in words):
+            return lang
+
+    if any(w in LANGUAGE_NOUNS for w in words):
+        return "en" if current == "es" else "es"
+
+    return None
 
 
 WAKE_FRAME_LENGTH = 1280
@@ -761,7 +814,6 @@ def warm_up_models() -> None:
         for lang in ("en", "es"):
             transcribe(warm_path, lang)
 
-        detect_language(warm_path, DEFAULT_LANGUAGE)
 
     except Exception as e:
 
@@ -1522,88 +1574,12 @@ def record_audio(
 # WHISPER
 # ============================================================
 
-# Languages the assistant supports. Whisper's own detection can pick any
-# of ~99 languages, so detection is restricted to these two.
-SUPPORTED_LANGUAGES = tuple(KOKORO_LANG_CODE_BY_LANGUAGE)
-
-# Keep the current language unless the detected one wins by this margin
-# (guards against flapping on very short utterances).
-LANGUAGE_SWITCH_MARGIN = 0.15
-
-
-def detect_language(
-    path: str,
-    current: str,
-) -> str:
-
-    """
-    Pick between the supported languages for one utterance using
-    Whisper's language-ID head. Falls back to ``current`` on any
-    error or when the result is ambiguous.
-    """
-
-    try:
-
-        from mlx_whisper.audio import (
-            N_FRAMES,
-            log_mel_spectrogram,
-            pad_or_trim,
-        )
-        from mlx_whisper.transcribe import ModelHolder
-        import mlx.core as mx
-
-        model = ModelHolder.get_model(WHISPER_MODEL, mx.float16)
-
-        mel = log_mel_spectrogram(
-            path,
-            n_mels=model.dims.n_mels,
-        )
-
-        segment = pad_or_trim(mel, N_FRAMES, axis=-2).astype(mx.float16)
-
-        _, probs = model.detect_language(segment)
-
-        scores = {
-            lang: float(probs.get(lang, 0.0))
-            for lang in SUPPORTED_LANGUAGES
-        }
-
-        total = sum(scores.values()) or 1.0
-
-        scores = {k: v / total for k, v in scores.items()}
-
-        best = max(scores, key=scores.get)
-
-        print(f"Language scores: {scores}")
-
-        if (
-            best != current
-            and scores[best] - scores.get(current, 0.0)
-            < LANGUAGE_SWITCH_MARGIN
-        ):
-            return current
-
-        return best
-
-    except Exception as e:
-
-        print(f"Language detection failed: {e}")
-
-        return current
-
-
 def transcribe(
     path: str = "turn_input.wav",
     language: str = DEFAULT_LANGUAGE,
-    auto_detect: bool = False,
-) -> tuple[str, float, str]:
+) -> tuple[str, float]:
 
     start = time.time()
-
-
-    if auto_detect:
-
-        language = detect_language(path, language)
 
 
     result =mlx_whisper.transcribe(
@@ -1637,7 +1613,6 @@ def transcribe(
     return (
         text,
         elapsed,
-        language,
     )
 
 
@@ -3031,22 +3006,10 @@ def _run_session_once(
                 )
 
 
-                text, t_stt, detected_language =transcribe(
+                text, t_stt =transcribe(
                         language=
                             session_language,
-                        auto_detect=True,
                     )
-
-
-                if detected_language != session_language:
-
-                    print(
-                        f"Language detected: "
-                        f"{session_language} -> "
-                        f"{detected_language}"
-                    )
-
-                    session_language = detected_language
 
 
                 emit(
@@ -3081,21 +3044,10 @@ def _run_session_once(
                 # SPOKEN LANGUAGE SWITCH
                 # =================================================
 
-                folded_text = fold_accents(
-                    normalized_text
+                switched_language = detect_language_command(
+                    text,
+                    session_language,
                 )
-
-
-                switched_language = None
-
-
-                for lang_code, phrase in LANGUAGE_SWITCH_PHRASES.items():
-
-                    if fold_accents(phrase) in folded_text:
-
-                        switched_language = lang_code
-
-                        break
 
 
                 if switched_language is not None:
