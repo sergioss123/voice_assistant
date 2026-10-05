@@ -279,6 +279,12 @@ KOKORO_MODEL_NAME = (
 KOKORO_VOICE = "af_heart"
 
 
+KOKORO_VOICE_BY_LANG_CODE = {
+    "a": "af_heart",
+    "e": "ef_dora",
+}
+
+
 KOKORO_LANG_CODE = "a"
 
 
@@ -725,6 +731,73 @@ def load_models() -> None:
     print(
         f'openWakeWord "{WAKEWORD}" loaded.'
     )
+
+
+    warm_up_models()
+
+
+def warm_up_models() -> None:
+
+    """
+    Run every model once at startup so the first real turn does not
+    pay for lazy initialisation (Whisper compile, one Kokoro pipeline
+    per language, llama.cpp prompt cache for system prompt + tools).
+    Must run on the MLX worker thread. Failures are non-fatal.
+    """
+
+    start = time.time()
+
+    try:
+
+        silence = np.zeros(16000, dtype=np.int16)
+
+        warm_path = os.path.join(
+            tempfile.gettempdir(),
+            "echo_warmup.wav",
+        )
+
+        write(warm_path, 16000, silence)
+
+        for lang in ("en", "es"):
+            transcribe(warm_path, lang)
+
+    except Exception as e:
+
+        print(f"Whisper warm-up skipped: {e}")
+
+    for lang_code in set(KOKORO_LANG_CODE_BY_LANGUAGE.values()):
+
+        try:
+
+            for _ in kokoro_model.generate(
+                text="Hello.",
+                voice=KOKORO_VOICE_BY_LANG_CODE.get(
+                    lang_code, KOKORO_VOICE
+                ),
+                speed=1.0,
+                lang_code=lang_code,
+            ):
+                pass
+
+        except Exception as e:
+
+            print(f"Kokoro warm-up ({lang_code}) skipped: {e}")
+
+    try:
+
+        llm_client.chat.completions.create(
+            model=LLM_MODEL,
+            messages=[{"role": "system", "content": SYSTEM_PROMPT},
+                      {"role": "user", "content": "Hi"}],
+            tools=TOOLS,
+            max_tokens=1,
+        )
+
+    except Exception as e:
+
+        print(f"LLM warm-up skipped: {e}")
+
+    print(f"Warm-up finished in {time.time() - start:.1f}s.")
 
 
 # ============================================================
@@ -1783,7 +1856,10 @@ def synthesize(
                 text,
 
             voice=
-                KOKORO_VOICE,
+                KOKORO_VOICE_BY_LANG_CODE.get(
+                    lang_code,
+                    KOKORO_VOICE,
+                ),
 
             speed=
                 1.0,
@@ -3007,10 +3083,14 @@ def _run_session_once(
 
                     reply_audio_id = streamed["audio_id"]
 
+                    t_first = streamed["t_first_audio"]
+
                     print(
-                        f"Streaming: {streamed['chunks']} chunks, "
-                        f"first audio in "
-                        f"{streamed['t_first_audio']}s"
+                        f"LATENCY: stt={t_stt:.2f}s "
+                        f"llm_total={t_llm:.2f}s "
+                        f"first_audio_after_stt="
+                        f"{t_first if t_first is None else round(t_first, 2)}s "
+                        f"chunks={streamed['chunks']}"
                     )
 
                     if stop_event.is_set():
