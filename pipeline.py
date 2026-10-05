@@ -751,9 +751,6 @@ def load_models() -> None:
     global wakeword_model
 
 
-    print(
-        "Loading Kokoro model..."
-    )
 
 
     kokoro_model = load_model(
@@ -761,14 +758,8 @@ def load_models() -> None:
     )
 
 
-    print(
-        "Kokoro model loaded."
-    )
 
 
-    print(
-        f'Loading openWakeWord "{WAKEWORD}"...'
-    )
 
 
     wakeword_model = Model(
@@ -781,9 +772,6 @@ def load_models() -> None:
     )
 
 
-    print(
-        f'openWakeWord "{WAKEWORD}" loaded.'
-    )
 
 
     warm_up_models()
@@ -851,7 +839,6 @@ def warm_up_models() -> None:
 
         print(f"LLM warm-up skipped: {e}")
 
-    print(f"Warm-up finished in {time.time() - start:.1f}s.")
 
 
 # ============================================================
@@ -909,9 +896,6 @@ def detect_wake_phrase(
     last_log_time = 0.0
 
 
-    print(
-        'Waiting for wake word "Alexa"...'
-    )
 
 
     emit(
@@ -963,9 +947,6 @@ def detect_wake_phrase(
                 WAKE_TIMEOUT_SECONDS
             ):
 
-                print(
-                    "Wake-word timeout."
-                )
 
                 return False
 
@@ -1052,15 +1033,6 @@ def detect_wake_phrase(
                 WAKE_LOG_INTERVAL_SECONDS
             ):
 
-                print(
-                    f"\r"
-                    f"{WAKEWORD}: "
-                    f"{score:.4f} "
-                    f"mic_rms: "
-                    f"{microphone_rms:.1f}",
-                    end="",
-                    flush=True,
-                )
 
 
                 last_log_time = now
@@ -1085,32 +1057,16 @@ def detect_wake_phrase(
                 last_detection_time =now
 
 
-                print()
-                print()
 
 
-                print(
-                    "----------------------------------------"
-                )
 
 
-                print(
-                    f'WAKE WORD DETECTED: '
-                    f'"{WAKEWORD}"'
-                )
 
 
-                print(
-                    f"Confidence: {score:.4f}"
-                )
 
 
-                print(
-                    "----------------------------------------"
-                )
 
 
-                print()
 
 
                 wakeword_model.reset()
@@ -1170,9 +1126,6 @@ def wait_for_post_wake_silence() -> None:
     silent_frames = 0
 
 
-    print(
-        "Waiting for microphone silence..."
-    )
 
 
     with sd.RawInputStream(
@@ -1245,9 +1198,6 @@ def wait_for_post_wake_silence() -> None:
                 silent_frames += 1
 
 
-    print(
-        "Microphone is quiet."
-    )
 
 
 # ============================================================
@@ -1315,9 +1265,6 @@ def _record_blocking_vad() -> np.ndarray:
     speech_frame_count = 0
 
 
-    print(
-        "Listening for user speech..."
-    )
 
 
     with sd.RawInputStream(
@@ -1353,9 +1300,6 @@ def _record_blocking_vad() -> np.ndarray:
                 MAX_RECORD_SECONDS
             ):
 
-                print(
-                    "Maximum recording time reached."
-                )
 
                 break
 
@@ -1408,9 +1352,6 @@ def _record_blocking_vad() -> np.ndarray:
 
                     speech_started = True
 
-                    print(
-                        "Speech detected."
-                    )
 
 
                 speech_frames.append(
@@ -1453,9 +1394,6 @@ def _record_blocking_vad() -> np.ndarray:
                     silence_frames_required
                 ):
 
-                    print(
-                        "End of speech detected."
-                    )
 
                     break
 
@@ -1468,9 +1406,6 @@ def _record_blocking_vad() -> np.ndarray:
                     START_TIMEOUT_SECONDS
                 ):
 
-                    print(
-                        "No speech detected."
-                    )
 
                     break
 
@@ -1561,10 +1496,6 @@ def record_audio(
     elapsed =time.time() - start
 
 
-    print(
-        f"Recording finished: "
-        f"{elapsed:.2f}s"
-    )
 
 
     return elapsed
@@ -1605,9 +1536,11 @@ def transcribe(
     elapsed =time.time() - start
 
 
-    print(
-        f"Whisper ({language}): {text}"
-    )
+    if text:
+
+        print(
+            f"Whisper ({language}): {text}"
+        )
 
 
     return (
@@ -1752,9 +1685,6 @@ def get_reply(
             )
 
 
-        print(
-            f"Tool result: {result}"
-        )
 
 
         # ====================================================
@@ -1794,10 +1724,6 @@ def get_reply(
             elapsed =time.time() - start
 
 
-            print(
-                f"Choco direct response: "
-                f"{reply_text}"
-            )
 
 
             return (
@@ -1898,9 +1824,6 @@ def synthesize(
     sample_rate = 24000
 
 
-    print(
-        f"Kokoro synthesizing: {text}"
-    )
 
 
     for result in (
@@ -2006,12 +1929,6 @@ def synthesize(
     elapsed =time.time() - start
 
 
-    print(
-        f"Kokoro generated "
-        f"{len(wav_data)} bytes "
-        f"at {sample_rate} Hz "
-        f"({duration:.2f}s)"
-    )
 
 
     return (
@@ -2114,9 +2031,6 @@ def wait_for_browser_audio(
         because doing so could erase a very fast browser event.
     """
 
-    print(
-        "Waiting for browser to finish audio..."
-    )
 
 
     start = time.time()
@@ -2136,10 +2050,6 @@ def wait_for_browser_audio(
                 expected_audio_id
             ):
 
-                print(
-                    f"Browser audio finished "
-                    f"(audio_id={expected_audio_id})."
-                )
 
                 return True
 
@@ -2322,7 +2232,6 @@ def _execute_tool_call(tool_call, language: str, emit):
 
     result = AVAILABLE_TOOLS[fn_name](language=language, **fn_args)
 
-    print(f"Tool result: {result}")
 
     return fn_name, str(result)
 
@@ -2771,17 +2680,6 @@ def _run_session_once(
     Alexa is required only once per session.
     """
 
-    print()
-    print(
-        "========================================"
-    )
-    print(
-        "ECHO CONTINUOUS CONVERSATION STARTED"
-    )
-    print(
-        "========================================"
-    )
-    print()
 
 
     # Resets every call, i.e. every new session / after "stop".
@@ -2836,23 +2734,12 @@ def _run_session_once(
                 return
 
 
-            print(
-                "Direct session start activated. "
-                "Skipping wake-word detection."
-            )
 
 
         # ====================================================
         # PHASE 2
         # ALEXA DETECTED
         # ====================================================
-
-        if wait_for_wake_word:
-
-            print(
-                'Alexa detected. Starting conversation.'
-            )
-
 
         emit(
             "state",
@@ -2954,9 +2841,6 @@ def _run_session_once(
         )
 
 
-        print(
-            "ECHO is listening."
-        )
 
 
         # ====================================================
@@ -2980,9 +2864,6 @@ def _run_session_once(
                 )
 
 
-                print(
-                    "Listening for user speech..."
-                )
 
 
                 t_record =record_audio()
@@ -3032,10 +2913,6 @@ def _run_session_once(
 
                 if normalized_text == EXIT_WORD:
 
-                    print(
-                        'Exit word "stop" detected. '
-                        "Ending conversation."
-                    )
 
                     break
 
@@ -3075,10 +2952,6 @@ def _run_session_once(
 
                 if not text:
 
-                    print(
-                        "Nothing heard. "
-                        "Returning to listening."
-                    )
 
 
                     emit(
@@ -3260,10 +3133,6 @@ def _run_session_once(
                     )
 
 
-                    print(
-                        "Response complete. "
-                        "Listening for next question..."
-                    )
 
 
                 # =================================================
@@ -3346,9 +3215,6 @@ def _run_session_once(
             return "ended"
 
 
-        print(
-            'Restarting wake-word detection after "stop".'
-        )
 
         return "stop_word"
 
@@ -3380,11 +3246,6 @@ def _run_session_once(
         )
 
 
-        print()
-        print(
-            "ECHO continuous conversation stopped."
-        )
-        print()
 
 
 # ============================================================

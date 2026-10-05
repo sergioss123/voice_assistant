@@ -75,10 +75,6 @@ async def lifespan(app: FastAPI):
     model creation and inference on one MLX-compatible thread.
     """
 
-    print()
-    print("========================================")
-    print("Starting ECHO...")
-    print("========================================")
 
     loop = asyncio.get_running_loop()
 
@@ -93,10 +89,8 @@ async def lifespan(app: FastAPI):
     )
 
 
-    print()
     print("Models loaded.")
     print("ECHO ready.")
-    print()
 
 
     yield
@@ -106,8 +100,6 @@ async def lifespan(app: FastAPI):
     # Shutdown
     # --------------------------------------------------------
 
-    print()
-    print("Shutting down ECHO...")
 
 
     ml_executor.shutdown(
@@ -115,7 +107,6 @@ async def lifespan(app: FastAPI):
     )
 
 
-    print("ECHO stopped.")
 
 
 # ============================================================
@@ -172,9 +163,6 @@ async def ws_endpoint(
     await websocket.accept()
 
 
-    print(
-        "WebSocket client connected."
-    )
 
 
     loop = asyncio.get_running_loop()
@@ -243,10 +231,6 @@ async def ws_endpoint(
         )
 
 
-        print(
-            f"WS OUT -> {event_type} "
-            f"({len(message)} bytes)"
-        )
 
 
         try:
@@ -280,10 +264,6 @@ async def ws_endpoint(
 
                 completed_future.result()
 
-                print(
-                    f"WS SENT -> "
-                    f"{event_type}"
-                )
 
             except Exception as e:
 
@@ -331,9 +311,6 @@ async def ws_endpoint(
             not session_future.done()
         ):
 
-            print(
-                "ECHO session already running."
-            )
 
             return
 
@@ -354,9 +331,6 @@ async def ws_endpoint(
         audio_finished_event.clear()
 
 
-        print(
-            "Starting continuous conversation session..."
-        )
 
 
         # ----------------------------------------------------
@@ -384,9 +358,6 @@ async def ws_endpoint(
         )
 
 
-        print(
-            "Continuous conversation session launched."
-        )
 
 
     # ========================================================
@@ -406,9 +377,6 @@ async def ws_endpoint(
 
             if not stop_event.is_set():
 
-                print(
-                    "Stopping ECHO session..."
-                )
 
                 stop_event.set()
 
@@ -431,9 +399,6 @@ async def ws_endpoint(
             )
 
 
-            print(
-                f"WS IN <- {raw_message}"
-            )
 
 
             try:
@@ -492,10 +457,6 @@ async def ws_endpoint(
 
             elif action == "audio_finished":
 
-                print(
-                    "Browser reports: "
-                    "audio playback finished."
-                )
 
 
                 audio_id = data.get(
@@ -560,9 +521,6 @@ async def ws_endpoint(
 
         connection_closed.set()
 
-        print(
-            "WebSocket client disconnected."
-        )
 
 
         stop_session()
@@ -586,7 +544,3 @@ async def ws_endpoint(
 
         stop_session()
 
-
-        print(
-            "WebSocket cleanup complete."
-        )
