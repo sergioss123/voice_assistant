@@ -796,311 +796,248 @@ if (conversationClose) {
    PLAY AUDIO
    ============================================================ */
 
+/* ============================================================
+   STREAMED AUDIO PLAYBACK
+   ============================================================
+
+   The server sends one reply as several "audio" chunks (one WAV
+   per sentence) that share the same audio_id, followed by an
+   "audio_end" event carrying the chunk total. Chunks are decoded
+   in order and scheduled back-to-back on the AudioContext clock
+   so playback is gapless. "audio_finished" is sent once, after
+   the last scheduled chunk has really ended.
+
+   Legacy single-WAV events carry total = 1.
+   ============================================================ */
+
+let playbackChain = Promise.resolve();
+
+let nextStartTime = 0;
+
+const activeSources = new Set();
+
+let replyPlayback = {
+    id: null,
+    total: null,
+    ended: 0,
+    finishedSent: false,
+};
+
+
+function enqueuePlayback(task) {
+
+    playbackChain = playbackChain
+        .then(task)
+        .catch((error) => {
+            console.error("Playback queue error:", error);
+        });
+}
+
+
+function resetReplyPlayback(audioId) {
+
+    if (replyPlayback.id !== audioId) {
+
+        replyPlayback = {
+            id: audioId,
+            total: null,
+            ended: 0,
+            finishedSent: false,
+        };
+    }
+}
+
+
+function sendAudioFinished(audioId) {
+
+    if (
+        ws &&
+        ws.readyState === WebSocket.OPEN
+    ) {
+
+        ws.send(
+            JSON.stringify({
+                action: "audio_finished",
+                audio_id: audioId,
+            })
+        );
+
+        console.log("Sent audio_finished to server.");
+    }
+}
+
+
+function maybeFinishReply() {
+
+    const state = replyPlayback;
+
+    if (
+        state.finishedSent ||
+        state.total === null ||
+        state.ended < state.total
+    ) {
+        return;
+    }
+
+    state.finishedSent = true;
+
+    browserAudioPlaying = false;
+
+    audioSource = null;
+
+    sendAudioFinished(state.id);
+
+    applyVisualState(
+        sessionActive ? "listening" : "idle"
+    );
+}
+
+
+function stopAllAudio() {
+
+    for (const source of activeSources) {
+
+        source.onended = null;
+
+        try {
+            source.stop();
+        } catch (error) {
+            /* already stopped */
+        }
+    }
+
+    activeSources.clear();
+
+    nextStartTime = 0;
+
+    browserAudioPlaying = false;
+
+    audioSource = null;
+}
+
+
 async function playAudio(
     base64Audio,
-    audioId
+    audioId,
+    total = null
 ) {
+
+    resetReplyPlayback(audioId);
+
+    if (total !== null) {
+        replyPlayback.total = total;
+    }
+
+    const state = replyPlayback;
 
     try {
 
         if (!base64Audio) {
 
-            console.error(
-                "Empty audio data."
-            );
+            console.error("Empty audio data.");
+
+            state.ended += 1;
+
+            maybeFinishReply();
 
             return;
         }
 
-
-        console.log(
-            "========== AUDIO =========="
-        );
-
-
-        console.log(
-            "Audio event received."
-        );
-
-
-        /* ----------------------------------------------------
-           AudioContext
-           ---------------------------------------------------- */
-
-        const context =
-            getAudioContext();
-
+        const context = getAudioContext();
 
         if (!audioEnabled) {
 
-            console.log(
-                "Assistant audio is disabled."
-            );
+            console.log("Assistant audio is disabled.");
 
+            state.ended += 1;
 
-            if (
-                ws &&
-                ws.readyState ===
-                    WebSocket.OPEN
-            ) {
-
-                ws.send(
-                    JSON.stringify(
-                        {
-                            action:
-                                "audio_finished",
-
-                            audio_id:
-                                audioId,
-                        }
-                    )
-                );
-            }
-
+            maybeFinishReply();
 
             return;
         }
 
-
-        if (
-            context.state !==
-            "running"
-        ) {
-
+        if (context.state !== "running") {
             await context.resume();
         }
 
+        const binaryString = atob(base64Audio);
 
-        /* ----------------------------------------------------
-           Base64 -> bytes
-           ---------------------------------------------------- */
+        const bytes = new Uint8Array(binaryString.length);
 
-        const binaryString =
-            atob(base64Audio);
-
-
-        const bytes =
-            new Uint8Array(
-                binaryString.length
-            );
-
-
-        for (
-            let i = 0;
-            i < binaryString.length;
-            i++
-        ) {
-
-            bytes[i] =
-                binaryString.charCodeAt(i);
+        for (let i = 0; i < binaryString.length; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
         }
-
-
-        console.log(
-            "WAV bytes:",
-            bytes.length
-        );
-
-
-        /* ----------------------------------------------------
-           Decode
-           ---------------------------------------------------- */
 
         const audioBuffer =
             await context.decodeAudioData(
                 bytes.buffer.slice(0)
             );
 
+        const source = context.createBufferSource();
 
-        console.log(
-            "Decoded audio:",
-            audioBuffer.duration,
-            "seconds"
-        );
+        source.buffer = audioBuffer;
 
-
-        /* ----------------------------------------------------
-           Create source
-           ---------------------------------------------------- */
-
-        const source =
-            context.createBufferSource();
-
-
-        audioSource =
-            source;
-
-
-        source.buffer =
-            audioBuffer;
-
-
-        source.connect(
-            context.destination
-        );
-
-
-        /* ====================================================
-           AUDIO FINISHED
-           ==================================================== */
+        source.connect(context.destination);
 
         source.onended = () => {
 
-            console.log(
-                "Browser audio playback finished."
-            );
+            activeSources.delete(source);
 
+            state.ended += 1;
 
-            browserAudioPlaying =
-                false;
-
-
-            audioSource =
-                null;
-
-
-            /*
-             * IMPORTANT:
-             *
-             * Tell FastAPI that the physical browser
-             * playback really ended.
-             */
-
-            if (
-                ws &&
-                ws.readyState ===
-                    WebSocket.OPEN
-            ) {
-
-                ws.send(
-                    JSON.stringify(
-                        {
-                            action:
-                                "audio_finished",
-
-                            audio_id:
-                                audioId,
-                        }
-                    )
-                );
-
-
-                console.log(
-                    "Sent audio_finished to server."
-                );
-            }
-
-
-            /*
-             * For continuous conversation, immediately
-             * return to LISTENING.
-             */
-
-            if (sessionActive) {
-
-                applyVisualState(
-                    "listening"
-                );
-
-            } else {
-
-                applyVisualState(
-                    "idle"
-                );
-            }
+            maybeFinishReply();
         };
 
+        activeSources.add(source);
 
-        /* ----------------------------------------------------
-           ACTUAL START
-           ---------------------------------------------------- */
+        audioSource = source;
 
-        browserAudioPlaying =
-            true;
-
-
-        applyVisualState(
-            "speaking"
+        const startAt = Math.max(
+            context.currentTime + 0.02,
+            nextStartTime
         );
 
+        nextStartTime = startAt + audioBuffer.duration;
 
-        source.start(0);
+        browserAudioPlaying = true;
 
+        applyVisualState("speaking");
+
+        source.start(startAt);
 
         console.log(
-            "Browser audio playback STARTED."
+            "Audio chunk scheduled:",
+            audioBuffer.duration.toFixed(2),
+            "s"
         );
-
 
     } catch (error) {
 
-        console.error(
-            "Audio playback error:",
-            error
-        );
-
+        console.error("Audio playback error:", error);
 
         if (audioHint) {
 
             audioHint.textContent =
                 "AUDIO BLOCKED - CLICK OR TAP ONCE TO ENABLE AUDIO";
 
-            audioHint.classList.remove(
-                "hidden"
-            );
+            audioHint.classList.remove("hidden");
         }
 
+        /* Count the failed chunk so the backend is never left waiting. */
+        state.ended += 1;
 
-        browserAudioPlaying =
-            false;
-
-
-        audioSource =
-            null;
-
-
-        /*
-         * Tell Python that playback failed, otherwise the
-         * backend could remain waiting forever.
-         */
-
-        if (
-            ws &&
-            ws.readyState ===
-                WebSocket.OPEN
-        ) {
-
-            ws.send(
-                JSON.stringify(
-                    {
-                        action:
-                            "audio_finished",
-
-                        audio_id:
-                            audioId,
-                    }
-                )
-            );
-        }
-
-
-        sessionActive =
-            true;
-
-
-        if (sessionActive) {
-
-            applyVisualState(
-                "waiting_wake"
-            );
-
-        } else {
-
-            applyVisualState(
-                "idle"
-            );
-        }
+        maybeFinishReply();
     }
+}
+
+
+function handleAudioEnd(audioId, total) {
+
+    resetReplyPlayback(audioId);
+
+    replyPlayback.total = total;
+
+    maybeFinishReply();
 }
 
 
@@ -1306,9 +1243,28 @@ function connect() {
 
             case "audio":
 
-                await playAudio(
-                    msg.data,
-                    msg.audio_id
+                enqueuePlayback(
+                    () => playAudio(
+                        msg.data,
+                        msg.audio_id,
+                        msg.total ?? null
+                    )
+                );
+
+                break;
+
+
+            /* ==============================================
+               AUDIO END (all chunks of a reply were sent)
+               ============================================== */
+
+            case "audio_end":
+
+                enqueuePlayback(
+                    async () => handleAudioEnd(
+                        msg.audio_id,
+                        msg.total
+                    )
                 );
 
                 break;
@@ -1414,12 +1370,7 @@ function connect() {
             false;
 
 
-        browserAudioPlaying =
-            false;
-
-
-        audioSource =
-            null;
+        stopAllAudio();
 
 
         applyVisualState(

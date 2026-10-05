@@ -48,6 +48,8 @@ import base64
 import io
 import json
 import os
+import queue
+import re
 import sys
 import tempfile
 import threading
@@ -1898,10 +1900,17 @@ def send_audio(
     audio_data: bytes,
     sample_rate: int,
     emit,
+    audio_id: int | None = None,
+    seq: int = 0,
+    total: int | None = 1,
 ) -> int:
 
     """
     Send WAV to browser.
+
+    A single-WAV message uses the defaults (``total=1``). A streamed
+    reply sends several chunks sharing one ``audio_id`` with
+    ``total=None``, then announces the count with ``audio_end``.
 
     IMPORTANT:
         Caller must clear audio_finished_event BEFORE
@@ -1911,10 +1920,11 @@ def send_audio(
     global audio_sequence
 
 
-    audio_sequence += 1
+    if audio_id is None:
 
+        audio_sequence += 1
 
-    audio_id = audio_sequence
+        audio_id = audio_sequence
 
 
     audio_base64 =base64.b64encode(
@@ -1938,6 +1948,12 @@ def send_audio(
 
             "audio_id":
                 audio_id,
+
+            "seq":
+                seq,
+
+            "total":
+                total,
         },
     )
 
@@ -2015,6 +2031,521 @@ def wait_for_browser_audio(
 
 
     return False
+
+
+# ============================================================
+# STREAMING REPLY (LLM stream -> sentences -> Kokoro -> browser)
+# ============================================================
+#
+# Threading model (MLX constraint):
+#
+#   helper thread   reads the llama.cpp HTTP stream, splits it into
+#                   sentences and puts them in a queue. It never
+#                   touches MLX.
+#   mlx-worker      (the calling thread) pops sentences, runs Kokoro
+#                   and sends each WAV chunk to the browser.
+#
+# While Kokoro speaks sentence N, the LLM keeps generating N+1.
+
+STREAMING_ENABLED = True
+
+STREAM_QUEUE_SIZE = 8
+
+FIRST_CHUNK_MIN_WORDS = 6
+
+MIN_CHUNK_WORDS = 3
+
+_ABBREVIATIONS = {
+    "mr", "mrs", "ms", "dr", "prof", "sr", "sra", "srta", "dra",
+    "vs", "etc", "no", "st", "jr", "av", "ud", "uds",
+}
+
+_SENTENCE_END_RE = re.compile(r"[.!?…]+[\"')\]]*(?=\s)|\n+")
+
+_CLAUSE_END_RE = re.compile(r"[,;:](?=\s)")
+
+
+class SentenceChunker:
+
+    """
+    Incrementally split streamed text into speakable chunks.
+
+    The first chunk is flushed early (at a clause boundary once it
+    has enough words) to reduce time-to-first-audio. Very short
+    sentences are merged with the following one.
+    """
+
+    def __init__(self) -> None:
+
+        self.buffer = ""
+
+        self.pending = ""
+
+        self.emitted = 0
+
+
+    def _is_abbreviation(self, text: str, end: int) -> bool:
+
+        match = re.search(r"([A-Za-zÁÉÍÓÚáéíóúÑñ]+)\.$", text[:end])
+
+        return bool(
+            match
+            and match.group(1).lower() in _ABBREVIATIONS
+        )
+
+
+    def _words(self, text: str) -> int:
+
+        return len(text.split())
+
+
+    def _take(self, sentence: str, out: list) -> None:
+
+        sentence = sentence.strip()
+
+        if not sentence:
+            return
+
+        candidate = f"{self.pending} {sentence}".strip()
+
+        if self._words(candidate) < MIN_CHUNK_WORDS:
+            self.pending = candidate
+            return
+
+        self.pending = ""
+        self.emitted += 1
+        out.append(candidate)
+
+
+    def feed(self, text: str) -> list:
+
+        self.buffer += text
+
+        out: list = []
+
+        while True:
+
+            cut = None
+
+            for match in _SENTENCE_END_RE.finditer(self.buffer):
+
+                if self._is_abbreviation(self.buffer, match.end()):
+                    continue
+
+                cut = match.end()
+                break
+
+            if (
+                cut is None
+                and self.emitted == 0
+                and not self.pending
+            ):
+
+                for match in _CLAUSE_END_RE.finditer(self.buffer):
+
+                    head = self.buffer[:match.end()]
+
+                    if self._words(head) >= FIRST_CHUNK_MIN_WORDS:
+                        cut = match.end()
+                        break
+
+            if cut is None:
+                break
+
+            self._take(self.buffer[:cut], out)
+
+            self.buffer = self.buffer[cut:]
+
+        return out
+
+
+    def flush(self) -> list:
+
+        out: list = []
+
+        rest = f"{self.pending} {self.buffer}".strip()
+
+        self.buffer = ""
+
+        self.pending = ""
+
+        if rest:
+            out.append(rest)
+
+        return out
+
+
+def _execute_tool_call(tool_call, language: str, emit):
+
+    fn_name = tool_call["function"]["name"]
+
+    fn_args = json.loads(
+        tool_call["function"]["arguments"] or "{}"
+    )
+
+    print(f"Tool requested: {fn_name}")
+
+    emit("tool_call", {"name": fn_name, "args": fn_args})
+
+    if fn_name not in AVAILABLE_TOOLS:
+        raise RuntimeError(f"Unknown tool: {fn_name}")
+
+    result = AVAILABLE_TOOLS[fn_name](language=language, **fn_args)
+
+    print(f"Tool result: {result}")
+
+    return fn_name, str(result)
+
+
+def _stream_completion(messages, tools, on_text, cancel) -> tuple:
+
+    """
+    Run one streaming completion. Returns (text, tool_calls).
+    ``on_text`` is called with every content delta.
+    """
+
+    kwargs = {
+        "model": LLM_MODEL,
+        "messages": messages,
+        "max_tokens": 150,
+        "stream": True,
+    }
+
+    if tools:
+        kwargs["tools"] = tools
+
+    stream = llm_client.chat.completions.create(**kwargs)
+
+    text_parts: list = []
+
+    calls: dict = {}
+
+    try:
+
+        for event in stream:
+
+            if cancel.is_set():
+                break
+
+            if not event.choices:
+                continue
+
+            delta = event.choices[0].delta
+
+            if delta.content:
+                text_parts.append(delta.content)
+                on_text(delta.content)
+
+            for tc in delta.tool_calls or []:
+
+                slot = calls.setdefault(
+                    tc.index,
+                    {
+                        "id": "",
+                        "type": "function",
+                        "function": {"name": "", "arguments": ""},
+                    },
+                )
+
+                if tc.id:
+                    slot["id"] = tc.id
+
+                if tc.function:
+
+                    if tc.function.name:
+                        slot["function"]["name"] += tc.function.name
+
+                    if tc.function.arguments:
+                        slot["function"]["arguments"] += (
+                            tc.function.arguments
+                        )
+
+    finally:
+
+        close = getattr(stream, "close", None)
+
+        if close:
+            close()
+
+    return (
+        "".join(text_parts),
+        [calls[i] for i in sorted(calls)],
+    )
+
+
+def _llm_stream_worker(
+    user_text: str,
+    emit,
+    language: str,
+    sentence_queue,
+    cancel,
+    result: dict,
+) -> None:
+
+    """
+    Helper thread: stream the reply, push sentences to the queue and
+    update ``conversation``. It is the only thread that mutates
+    ``conversation`` while a reply is in flight.
+    """
+
+    start = time.time()
+
+    chunker = SentenceChunker()
+
+    spoken: list = []
+
+    def put(sentence: str) -> None:
+
+        spoken.append(sentence)
+
+        while not cancel.is_set():
+
+            try:
+                sentence_queue.put(sentence, timeout=0.1)
+                return
+            except queue.Full:
+                continue
+
+    def on_text(delta: str) -> None:
+
+        for sentence in chunker.feed(delta):
+            put(sentence)
+
+    try:
+
+        conversation.append({"role": "user", "content": user_text})
+
+        text, calls = _stream_completion(
+            conversation, TOOLS, on_text, cancel
+        )
+
+        if calls and not cancel.is_set():
+
+            for sentence in chunker.flush():
+                put(sentence)
+
+            conversation.append(
+                {
+                    "role": "assistant",
+                    "content": text or None,
+                    "tool_calls": calls,
+                }
+            )
+
+            direct_reply = None
+
+            for call in calls:
+
+                fn_name, tool_result = _execute_tool_call(
+                    call, language, emit
+                )
+
+                conversation.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": call["id"],
+                        "content": tool_result,
+                    }
+                )
+
+                if fn_name == "greet_choco":
+                    direct_reply = tool_result
+
+            if direct_reply is not None:
+
+                conversation.append(
+                    {"role": "assistant", "content": direct_reply}
+                )
+
+                put(direct_reply)
+
+                result["reply"] = direct_reply
+
+            else:
+
+                text, _ = _stream_completion(
+                    conversation, None, on_text, cancel
+                )
+
+                for sentence in chunker.flush():
+                    put(sentence)
+
+                if text:
+                    conversation.append(
+                        {"role": "assistant", "content": text}
+                    )
+
+                result["reply"] = text
+
+        else:
+
+            for sentence in chunker.flush():
+                put(sentence)
+
+            if text:
+                conversation.append(
+                    {"role": "assistant", "content": text}
+                )
+
+            result["reply"] = text
+
+        if not spoken and not cancel.is_set():
+
+            fallback = "Sorry, I couldn't generate a response."
+
+            put(fallback)
+
+            result["reply"] = fallback
+
+    except Exception as e:
+
+        print(f"LLM stream error: {e}")
+
+        result["error"] = e
+
+    finally:
+
+        result["elapsed"] = time.time() - start
+
+        print(f"Gemma: {result.get('reply', '')}")
+
+        while True:
+
+            try:
+                sentence_queue.put(None, timeout=0.1)
+                break
+            except queue.Full:
+                if cancel.is_set():
+                    break
+
+
+def speak_reply_streaming(
+    user_text: str,
+    emit,
+    language: str,
+    stop_event,
+    audio_finished_event,
+) -> dict:
+
+    """
+    Stream the LLM reply and speak it sentence by sentence.
+
+    Runs on the MLX worker thread. Returns a dict with ``reply``,
+    ``audio_id``, ``chunks``, ``t_llm``, ``t_first_audio``, ``t_tts``.
+    """
+
+    global audio_sequence
+
+    sentence_queue: queue.Queue = queue.Queue(maxsize=STREAM_QUEUE_SIZE)
+
+    cancel = threading.Event()
+
+    result: dict = {}
+
+    lang_code = KOKORO_LANG_CODE_BY_LANGUAGE.get(
+        language, KOKORO_LANG_CODE
+    )
+
+    start = time.time()
+
+    worker = threading.Thread(
+        target=_llm_stream_worker,
+        args=(user_text, emit, language, sentence_queue, cancel, result),
+        name="llm-stream",
+        daemon=True,
+    )
+
+    worker.start()
+
+    audio_sequence += 1
+
+    audio_id = audio_sequence
+
+    chunks = 0
+
+    t_tts = 0.0
+
+    duration = 0.0
+
+    t_first_audio = None
+
+    speaking_emitted = False
+
+    try:
+
+        while not stop_event.is_set():
+
+            try:
+                sentence = sentence_queue.get(timeout=0.1)
+            except queue.Empty:
+                continue
+
+            if sentence is None:
+                break
+
+            if not speaking_emitted:
+
+                emit("state", {"value": "speaking"})
+
+                audio_finished_event.clear()
+
+                speaking_emitted = True
+
+            audio_data, sample_rate, tts_elapsed, chunk_duration = synthesize(
+                sentence, lang_code
+            )
+
+            t_tts += tts_elapsed
+
+            duration += chunk_duration
+
+            if stop_event.is_set():
+                break
+
+            send_audio(
+                audio_data,
+                sample_rate,
+                emit,
+                audio_id=audio_id,
+                seq=chunks,
+                total=None,
+            )
+
+            chunks += 1
+
+            if t_first_audio is None:
+                t_first_audio = time.time() - start
+
+    except Exception as e:
+
+        print(f"Streaming TTS error: {e}")
+
+        result.setdefault("error", e)
+
+    finally:
+
+        cancel.set()
+
+        worker.join(timeout=5.0)
+
+        if chunks == 0:
+            audio_finished_event.clear()
+
+        emit("audio_end", {"audio_id": audio_id, "total": chunks})
+
+    reply = result.get("reply", "")
+
+    emit("reply", {"text": reply})
+
+    return {
+        "reply": reply,
+        "audio_id": audio_id,
+        "chunks": chunks,
+        "t_llm": result.get("elapsed", 0.0),
+        "t_first_audio": t_first_audio,
+        "t_tts": t_tts,
+        "duration": duration,
+    }
 
 
 # ============================================================
@@ -2456,73 +2987,105 @@ def _run_session_once(
                 )
 
 
-                reply, t_llm =get_reply(
+                if STREAMING_ENABLED:
+
+                    streamed = speak_reply_streaming(
                         text,
                         emit,
                         session_language,
+                        stop_event,
+                        audio_finished_event,
+                    )
+
+                    reply = streamed["reply"]
+
+                    t_llm = streamed["t_llm"]
+
+                    t_tts = streamed["t_tts"]
+
+                    audio_duration = streamed["duration"]
+
+                    reply_audio_id = streamed["audio_id"]
+
+                    print(
+                        f"Streaming: {streamed['chunks']} chunks, "
+                        f"first audio in "
+                        f"{streamed['t_first_audio']}s"
+                    )
+
+                    if stop_event.is_set():
+
+                        break
+
+                else:
+
+                    reply, t_llm =get_reply(
+                            text,
+                            emit,
+                            session_language,
+                        )
+
+
+                    emit(
+                        "reply",
+                        {
+                            "text":
+                                reply
+                        },
                     )
 
 
-                emit(
-                    "reply",
-                    {
-                        "text":
-                            reply
-                    },
-                )
+                    if stop_event.is_set():
+
+                        break
 
 
-                if stop_event.is_set():
+                    # =================================================
+                    # KOKORO
+                    # =================================================
 
-                    break
-
-
-                # =================================================
-                # KOKORO
-                # =================================================
-
-                emit(
-                    "state",
-                    {
-                        "value":
-                            "speaking"
-                    },
-                )
+                    emit(
+                        "state",
+                        {
+                            "value":
+                                "speaking"
+                        },
+                    )
 
 
-                (
-                    audio_data,
-                    sample_rate,
-                    t_tts,
-                    audio_duration,
-                ) = synthesize(
-                    reply,
-                    KOKORO_LANG_CODE_BY_LANGUAGE.get(
-                        session_language,
-                        KOKORO_LANG_CODE,
-                    ),
-                )
+                    (
+                        audio_data,
+                        sample_rate,
+                        t_tts,
+                        audio_duration,
+                    ) = synthesize(
+                        reply,
+                        KOKORO_LANG_CODE_BY_LANGUAGE.get(
+                            session_language,
+                            KOKORO_LANG_CODE,
+                        ),
+                    )
 
 
-                # =================================================
-                # CRITICAL:
-                #
-                # Clear the completion event BEFORE sending the
-                # audio.
-                # =================================================
+                    # =================================================
+                    # CRITICAL:
+                    #
+                    # Clear the completion event BEFORE sending the
+                    # audio.
+                    # =================================================
 
-                audio_finished_event.clear()
+                    audio_finished_event.clear()
 
 
-                # =================================================
-                # SEND AUDIO
-                # =================================================
+                    # =================================================
+                    # SEND AUDIO
+                    # =================================================
 
-                reply_audio_id = send_audio(
-                    audio_data,
-                    sample_rate,
-                    emit,
-                )
+                    reply_audio_id = send_audio(
+                        audio_data,
+                        sample_rate,
+                        emit,
+                    )
 
 
                 # =================================================
