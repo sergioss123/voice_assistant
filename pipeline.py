@@ -761,6 +761,8 @@ def warm_up_models() -> None:
         for lang in ("en", "es"):
             transcribe(warm_path, lang)
 
+        detect_language(warm_path, DEFAULT_LANGUAGE)
+
     except Exception as e:
 
         print(f"Whisper warm-up skipped: {e}")
@@ -1520,12 +1522,88 @@ def record_audio(
 # WHISPER
 # ============================================================
 
+# Languages the assistant supports. Whisper's own detection can pick any
+# of ~99 languages, so detection is restricted to these two.
+SUPPORTED_LANGUAGES = tuple(KOKORO_LANG_CODE_BY_LANGUAGE)
+
+# Keep the current language unless the detected one wins by this margin
+# (guards against flapping on very short utterances).
+LANGUAGE_SWITCH_MARGIN = 0.15
+
+
+def detect_language(
+    path: str,
+    current: str,
+) -> str:
+
+    """
+    Pick between the supported languages for one utterance using
+    Whisper's language-ID head. Falls back to ``current`` on any
+    error or when the result is ambiguous.
+    """
+
+    try:
+
+        from mlx_whisper.audio import (
+            N_FRAMES,
+            log_mel_spectrogram,
+            pad_or_trim,
+        )
+        from mlx_whisper.transcribe import ModelHolder
+        import mlx.core as mx
+
+        model = ModelHolder.get_model(WHISPER_MODEL, mx.float16)
+
+        mel = log_mel_spectrogram(
+            path,
+            n_mels=model.dims.n_mels,
+        )
+
+        segment = pad_or_trim(mel, N_FRAMES, axis=-2).astype(mx.float16)
+
+        _, probs = model.detect_language(segment)
+
+        scores = {
+            lang: float(probs.get(lang, 0.0))
+            for lang in SUPPORTED_LANGUAGES
+        }
+
+        total = sum(scores.values()) or 1.0
+
+        scores = {k: v / total for k, v in scores.items()}
+
+        best = max(scores, key=scores.get)
+
+        print(f"Language scores: {scores}")
+
+        if (
+            best != current
+            and scores[best] - scores.get(current, 0.0)
+            < LANGUAGE_SWITCH_MARGIN
+        ):
+            return current
+
+        return best
+
+    except Exception as e:
+
+        print(f"Language detection failed: {e}")
+
+        return current
+
+
 def transcribe(
     path: str = "turn_input.wav",
     language: str = DEFAULT_LANGUAGE,
-) -> tuple[str, float]:
+    auto_detect: bool = False,
+) -> tuple[str, float, str]:
 
     start = time.time()
+
+
+    if auto_detect:
+
+        language = detect_language(path, language)
 
 
     result =mlx_whisper.transcribe(
@@ -1559,6 +1637,7 @@ def transcribe(
     return (
         text,
         elapsed,
+        language,
     )
 
 
@@ -2952,10 +3031,22 @@ def _run_session_once(
                 )
 
 
-                text, t_stt =transcribe(
+                text, t_stt, detected_language =transcribe(
                         language=
                             session_language,
+                        auto_detect=True,
                     )
+
+
+                if detected_language != session_language:
+
+                    print(
+                        f"Language detected: "
+                        f"{session_language} -> "
+                        f"{detected_language}"
+                    )
+
+                    session_language = detected_language
 
 
                 emit(
